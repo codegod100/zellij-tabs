@@ -70,10 +70,11 @@ fn fit(segs: &[TabSeg], cols: usize, act: usize) -> Vec<TabSeg> {
 impl ZellijPlugin for State {
     fn load(&mut self, _c: std::collections::BTreeMap<String, String>) {
         set_selectable(true);
-        // Request each permission individually for proper tracking
-        request_permission(&[PermissionType::ReadApplicationState]);
-        request_permission(&[PermissionType::ChangeApplicationState]);
-        subscribe(&[EventType::TabUpdate, EventType::ModeUpdate, EventType::Mouse, EventType::Key, EventType::PermissionRequestResult]);
+        request_permission(&[
+            PermissionType::ReadApplicationState,
+            PermissionType::ChangeApplicationState,
+        ]);
+        subscribe(&[EventType::TabUpdate, EventType::ModeUpdate, EventType::Mouse, EventType::Key]);
     }
 
     fn update(&mut self, event: Event) -> bool {
