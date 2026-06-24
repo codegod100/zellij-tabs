@@ -2790,10 +2790,11 @@ pub fn bytes_from_stdin() -> Result<Vec<u8>> {
 
 #[doc(hidden)]
 pub fn object_to_stdout(object: &impl Serialize) {
-    // Write directly through WASI fd_write, bypassing Rust std buffering.
+    // TODO: no crashy
     let json = serde_json::to_string(object).unwrap();
     let mut data = json.into_bytes();
     data.push(b'\n');
+    // println! may buffer in WASI - use fd_write directly
     #[link(wasm_import_module = "wasi_snapshot_preview1")]
     extern "C" {
         fn fd_write(fd: i32, iovs: *const u8, iovs_len: usize, nwritten: *mut usize) -> i32;
@@ -2802,9 +2803,7 @@ pub fn object_to_stdout(object: &impl Serialize) {
     let buf_ptr = data.as_ptr();
     let buf_len = data.len() as u32;
     let iov = [buf_ptr as u32, buf_len];
-    unsafe {
-        fd_write(1, iov.as_ptr() as *const u8, 1, &mut nwritten);
-    }
+    unsafe { fd_write(1, iov.as_ptr() as *const u8, 1, &mut nwritten); }
 }
 
 /// Post a message to a worker of this plugin, for more information please see [Plugin Workers](https://zellij.dev/documentation/plugin-api-workers.md)

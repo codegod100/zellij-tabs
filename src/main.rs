@@ -6,11 +6,13 @@ use zellij_tile::prelude::*;
 struct TabSeg { pos: usize, width: usize, part: Vec<u8> }
 
 #[derive(Default)]
-struct State { tabs: Vec<TabInfo>, segs: Vec<TabSeg>, palette: Option<Styling>, dbg: String }
+struct State { tabs: Vec<TabInfo>, segs: Vec<TabSeg>, palette: Option<Styling> }
 
 register_plugin!(State);
 
-fn rgb(c: PaletteColor) -> (u8, u8, u8) { match c { PaletteColor::Rgb(r) => r, _ => (128, 128, 128) } }
+fn rgb(c: PaletteColor) -> (u8, u8, u8) {
+    match c { PaletteColor::Rgb(r) => r, _ => (128, 128, 128) }
+}
 
 fn ansi(w: &mut Vec<u8>, fg: (u8, u8, u8), bg: (u8, u8, u8), bold: bool) {
     let _ = write!(w, "\x1b[0m");
@@ -74,23 +76,18 @@ impl ZellijPlugin for State {
             PermissionType::ReadApplicationState,
             PermissionType::ChangeApplicationState,
         ]);
-        subscribe(&[EventType::TabUpdate, EventType::ModeUpdate, EventType::Mouse, EventType::Key]);
+        subscribe(&[
+            EventType::TabUpdate,
+            EventType::ModeUpdate,
+            EventType::Mouse,
+            EventType::Key,
+        ]);
     }
 
     fn update(&mut self, event: Event) -> bool {
         match event {
-            Event::PermissionRequestResult(s) => {
-                self.dbg = format!("perm={:?}", s);
-                false
-            }
-            Event::ModeUpdate(m) => {
-                self.palette = Some(m.style.colors);
-                false
-            }
-            Event::TabUpdate(tabs) => {
-                self.tabs = tabs;
-                true
-            }
+            Event::ModeUpdate(m) => { self.palette = Some(m.style.colors); false }
+            Event::TabUpdate(tabs) => { self.tabs = tabs; true }
             Event::Key(key) => {
                 if key.bare_key == BareKey::Esc || key.bare_key == BareKey::Enter {
                     switch_to_input_mode(&InputMode::Normal);
@@ -101,21 +98,18 @@ impl ZellijPlugin for State {
                 Mouse::LeftClick(_, col) => {
                     let col = col as usize;
                     if let Some(p) = close_hit(&self.segs, col) {
-                        self.dbg = format!("close {}", p);
                         if p != act(&self.tabs) { switch_tab_to((p + 1) as u32); }
                         close_tab_with_index(p);
                     } else if let Some(s) = tab_at(&self.segs, col) {
-                        self.dbg = format!("switch {}", s.pos);
-                        go_to_tab((s.pos + 1) as u32);
-                    } else {
-                        self.dbg = "miss".to_string();
+                        if s.pos != act(&self.tabs) { go_to_tab(s.pos as u32); }
                     }
-                    true // force re-render so dbg updates
+                    false
                 }
                 Mouse::RightClick(_, col) => {
                     let col = col as usize;
                     if let Some(s) = tab_at(&self.segs, col) {
-                        if s.pos != act(&self.tabs) { go_to_tab((s.pos + 1) as u32); }
+                        if s.pos != act(&self.tabs) { go_to_tab(s.pos as u32); }
+                        switch_to_input_mode(&InputMode::Normal);
                         switch_to_input_mode(&InputMode::RenameTab);
                     }
                     false
@@ -137,7 +131,6 @@ impl ZellijPlugin for State {
         for s in &segs { out.extend_from_slice(&s.part); }
         let bg = rgb(p.text_unselected.background);
         let _ = write!(out, "\x1b[48;2;{};{};{}m\x1b[0K", bg.0, bg.1, bg.2);
-        let _ = write!(out, " {}", self.dbg);
         let _ = std::io::stdout().write_all(&out);
         self.segs = segs;
     }
