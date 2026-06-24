@@ -6,7 +6,7 @@ use zellij_tile::prelude::*;
 struct TabSeg { tab_position: usize, width: usize, part: Vec<u8> }
 
 #[derive(Default)]
-struct State { tabs: Vec<TabInfo>, segs: Vec<TabSeg>, palette: Option<Styling>, perm_ok: bool }
+struct State { tabs: Vec<TabInfo>, segs: Vec<TabSeg>, palette: Option<Styling>, clicks: u32 }
 
 register_plugin!(State);
 
@@ -69,24 +69,22 @@ fn fit(segs: &[TabSeg], cols: usize, act: usize) -> Vec<TabSeg> {
 
 impl ZellijPlugin for State {
     fn load(&mut self, _c: std::collections::BTreeMap<String, String>) {
-        set_selectable(true);
+        set_selectable(false);
         request_permission(&[PermissionType::ReadApplicationState, PermissionType::ChangeApplicationState]);
         subscribe(&[EventType::TabUpdate, EventType::ModeUpdate, EventType::Mouse, EventType::PermissionRequestResult]);
     }
 
     fn update(&mut self, event: Event) -> bool {
         match event {
-            Event::PermissionRequestResult(s) => { if s == PermissionStatus::Granted { self.perm_ok = true; } false }
+            Event::PermissionRequestResult(_) => false,
             Event::ModeUpdate(m) => { self.palette = Some(m.style.colors); false }
             Event::TabUpdate(tabs) => { self.tabs = tabs; true }
             Event::Mouse(me) => {
-                if !self.perm_ok { return false; }
+                self.clicks += 1;
                 match me {
                     Mouse::LeftClick(_, col) => {
                         let col = col as usize;
-                        // Close on ×, switch on name, fallback to close_focused_tab
                         if let Some(p) = close_hit(&self.segs, col) {
-                            // Focus tab first, then close
                             if p != act(&self.tabs) { switch_tab_to((p + 1) as u32); }
                             close_focused_tab();
                         } else if let Some(s) = tab_at(&self.segs, col) {
@@ -94,7 +92,7 @@ impl ZellijPlugin for State {
                                 go_to_tab((s.tab_position + 1) as u32);
                             }
                         }
-                        true
+                        false
                     }
                     Mouse::RightClick(_, col) => {
                         let col = col as usize;
@@ -102,10 +100,10 @@ impl ZellijPlugin for State {
                             if s.tab_position != act(&self.tabs) { go_to_tab((s.tab_position + 1) as u32); }
                             switch_to_input_mode(&InputMode::RenameTab);
                         }
-                        true
+                        false
                     }
-                    Mouse::ScrollUp(_) => { go_to_next_tab(); true }
-                    Mouse::ScrollDown(_) => { go_to_previous_tab(); true }
+                    Mouse::ScrollUp(_) => { go_to_next_tab(); false }
+                    Mouse::ScrollDown(_) => { go_to_previous_tab(); false }
                     _ => false,
                 }
             }
@@ -114,10 +112,7 @@ impl ZellijPlugin for State {
     }
 
     fn render(&mut self, _rows: usize, cols: usize) {
-        if self.tabs.is_empty() {
-            if !self.perm_ok { let _ = std::io::stdout().write_all(b"need perm"); }
-            return;
-        }
+        if self.tabs.is_empty() { return; }
         let p = match &self.palette { Some(p) => p.clone(), None => return };
         let segs: Vec<TabSeg> = self.tabs.iter().map(|t| build_tab(t, &p)).collect();
         let segs = fit(&segs, cols, act(&self.tabs));
@@ -125,6 +120,8 @@ impl ZellijPlugin for State {
         for s in &segs { out.extend_from_slice(&s.part); }
         let bg = rgb(p.text_unselected.background);
         let _ = write!(out, "\x1b[48;2;{};{};{}m\x1b[0K", bg.0, bg.1, bg.2);
+        // Debug: show click count
+        let _ = write!(out, " clicks={}", self.clicks);
         let _ = std::io::stdout().write_all(&out);
         self.segs = segs;
     }
