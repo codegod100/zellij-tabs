@@ -3,10 +3,10 @@ use unicode_width::UnicodeWidthStr;
 use zellij_tile::prelude::*;
 
 #[derive(Debug, Clone)]
-struct TabSeg { tab_position: usize, width: usize, part: Vec<u8> }
+struct TabSeg { pos: usize, width: usize, part: Vec<u8> }
 
 #[derive(Default)]
-struct State { tabs: Vec<TabInfo>, segs: Vec<TabSeg>, palette: Option<Styling>, clicks: u32 }
+struct State { tabs: Vec<TabInfo>, segs: Vec<TabSeg>, palette: Option<Styling>, dbg: String }
 
 register_plugin!(State);
 
@@ -33,7 +33,7 @@ fn build_tab(tab: &TabInfo, p: &Styling) -> TabSeg {
     ansi(&mut v, fg, bg, true);  write!(&mut v, "{}", lbl).ok();
     ansi(&mut v, close, bg, true); write!(&mut v, " ×").ok();
     ansi(&mut v, bg, sb, false); write!(&mut v, "").ok();
-    TabSeg { tab_position: tab.position, width: tab.name.width() + 6, part: v }
+    TabSeg { pos: tab.position, width: tab.name.width() + 6, part: v }
 }
 
 fn tab_at(segs: &[TabSeg], col: usize) -> Option<&TabSeg> {
@@ -45,7 +45,7 @@ fn tab_at(segs: &[TabSeg], col: usize) -> Option<&TabSeg> {
 fn close_hit(segs: &[TabSeg], col: usize) -> Option<usize> {
     let mut c = 0;
     for s in segs {
-        if col >= c + s.width.saturating_sub(3) && col < c + s.width.saturating_sub(1) { return Some(s.tab_position); }
+        if col >= c + s.width.saturating_sub(3) && col < c + s.width.saturating_sub(1) { return Some(s.pos); }
         c += s.width;
     }
     None
@@ -69,44 +69,60 @@ fn fit(segs: &[TabSeg], cols: usize, act: usize) -> Vec<TabSeg> {
 
 impl ZellijPlugin for State {
     fn load(&mut self, _c: std::collections::BTreeMap<String, String>) {
-        set_selectable(false);
-        request_permission(&[PermissionType::ReadApplicationState, PermissionType::ChangeApplicationState]);
-        subscribe(&[EventType::TabUpdate, EventType::ModeUpdate, EventType::Mouse, EventType::PermissionRequestResult]);
+        set_selectable(true);
+        // Request each permission individually for proper tracking
+        request_permission(&[PermissionType::ReadApplicationState]);
+        request_permission(&[PermissionType::ChangeApplicationState]);
+        subscribe(&[EventType::TabUpdate, EventType::ModeUpdate, EventType::Mouse, EventType::Key, EventType::PermissionRequestResult]);
     }
 
     fn update(&mut self, event: Event) -> bool {
         match event {
-            Event::PermissionRequestResult(_) => false,
-            Event::ModeUpdate(m) => { self.palette = Some(m.style.colors); false }
-            Event::TabUpdate(tabs) => { self.tabs = tabs; true }
-            Event::Mouse(me) => {
-                self.clicks += 1;
-                match me {
-                    Mouse::LeftClick(_, col) => {
-                        let col = col as usize;
-                        if let Some(p) = close_hit(&self.segs, col) {
-                            if p != act(&self.tabs) { switch_tab_to((p + 1) as u32); }
-                            close_focused_tab();
-                        } else if let Some(s) = tab_at(&self.segs, col) {
-                            if s.tab_position != act(&self.tabs) {
-                                go_to_tab((s.tab_position + 1) as u32);
-                            }
-                        }
-                        false
-                    }
-                    Mouse::RightClick(_, col) => {
-                        let col = col as usize;
-                        if let Some(s) = tab_at(&self.segs, col) {
-                            if s.tab_position != act(&self.tabs) { go_to_tab((s.tab_position + 1) as u32); }
-                            switch_to_input_mode(&InputMode::RenameTab);
-                        }
-                        false
-                    }
-                    Mouse::ScrollUp(_) => { go_to_next_tab(); false }
-                    Mouse::ScrollDown(_) => { go_to_previous_tab(); false }
-                    _ => false,
-                }
+            Event::PermissionRequestResult(s) => {
+                self.dbg = format!("perm={:?}", s);
+                false
             }
+            Event::ModeUpdate(m) => {
+                self.palette = Some(m.style.colors);
+                false
+            }
+            Event::TabUpdate(tabs) => {
+                self.tabs = tabs;
+                true
+            }
+            Event::Key(key) => {
+                if key.bare_key == BareKey::Esc || key.bare_key == BareKey::Enter {
+                    switch_to_input_mode(&InputMode::Normal);
+                }
+                false
+            }
+            Event::Mouse(me) => match me {
+                Mouse::LeftClick(_, col) => {
+                    let col = col as usize;
+                    if let Some(p) = close_hit(&self.segs, col) {
+                        self.dbg = format!("close {}", p);
+                        if p != act(&self.tabs) { switch_tab_to((p + 1) as u32); }
+                        close_tab_with_index(p);
+                    } else if let Some(s) = tab_at(&self.segs, col) {
+                        self.dbg = format!("switch {}", s.pos);
+                        go_to_tab((s.pos + 1) as u32);
+                    } else {
+                        self.dbg = "miss".to_string();
+                    }
+                    true // force re-render so dbg updates
+                }
+                Mouse::RightClick(_, col) => {
+                    let col = col as usize;
+                    if let Some(s) = tab_at(&self.segs, col) {
+                        if s.pos != act(&self.tabs) { go_to_tab((s.pos + 1) as u32); }
+                        switch_to_input_mode(&InputMode::RenameTab);
+                    }
+                    false
+                }
+                Mouse::ScrollUp(_) => { go_to_next_tab(); false }
+                Mouse::ScrollDown(_) => { go_to_previous_tab(); false }
+                _ => false,
+            },
             _ => false,
         }
     }
@@ -120,8 +136,7 @@ impl ZellijPlugin for State {
         for s in &segs { out.extend_from_slice(&s.part); }
         let bg = rgb(p.text_unselected.background);
         let _ = write!(out, "\x1b[48;2;{};{};{}m\x1b[0K", bg.0, bg.1, bg.2);
-        // Debug: show click count
-        let _ = write!(out, " clicks={}", self.clicks);
+        let _ = write!(out, " {}", self.dbg);
         let _ = std::io::stdout().write_all(&out);
         self.segs = segs;
     }
